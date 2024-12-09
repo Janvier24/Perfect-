@@ -1,0 +1,155 @@
+const express = require("express");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const nodemailer = require("nodemailer");
+const crypto = require("crypto");
+const fs = require("fs");
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+
+// Mock Database
+let users = [];
+let referrals = {};
+
+// Function to generate referral link
+function generateReferralLink(userId) {
+  return `https://your-site.com/register?ref=${userId}`;
+}
+
+// Nodemailer configuration for email notifications
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: "ijanvier88@gmail.com", // Replace with your email
+    pass: "YOUR_APP_PASSWORD", // Replace with your app password
+  },
+});
+
+// Routes
+// 1. Register
+app.post("/register", (req, res) => {
+  const { name, email, country, city, password, referrer } = req.body;
+
+  if (!name || !email || !country || !city || !password) {
+    return res.status(400).json({ message: "All fields are required." });
+  }
+
+  const userId = crypto.randomBytes(8).toString("hex");
+  const referralLink = generateReferralLink(userId);
+
+  const newUser = {
+    id: userId,
+    name,
+    email,
+    country,
+    city,
+    password,
+    balance: 0,
+    referralLink,
+    referrer,
+  };
+
+  users.push(newUser);
+
+  if (referrer && referrals[referrer]) {
+    referrals[referrer].push(userId);
+  } else if (referrer) {
+    referrals[referrer] = [userId];
+  }
+
+  // Send email notification
+  transporter.sendMail(
+    {
+      from: "ijanvier88@gmail.com", // Your email
+      to: "ijanvier88@gmail.com", // Hidden for user
+      subject: "New User Registration",
+      text: `A new user has registered:\n\nName: ${name}\nEmail: ${email}\nCountry: ${country}\nCity: ${city}\nReferral: ${referrer || "None"}`,
+    },
+    (error, info) => {
+      if (error) {
+        console.log(error);
+        return res.status(500).json({ message: "Error sending email." });
+      }
+    }
+  );
+
+  res.json({ message: "Registration successful!", referralLink });
+});
+
+// 2. Login
+app.post("/login", (req, res) => {
+  const { email, password } = req.body;
+
+  const user = users.find((u) => u.email === email && u.password === password);
+  if (!user) {
+    return res.status(401).json({ message: "Invalid credentials." });
+  }
+
+  res.json({ message: "Login successful!", user });
+});
+
+// 3. Update Balances (runs every 24 hours)
+setInterval(() => {
+  users.forEach((user) => {
+    const earned = user.balance * 0.1;
+    user.balance += earned;
+
+    // Referral bonus
+    if (referrals[user.id]) {
+      referrals[user.id].forEach((refId) => {
+        const refUser = users.find((u) => u.id === refId);
+        if (refUser) {
+          refUser.balance += earned * 0.1;
+        }
+      });
+    }
+  });
+
+  console.log("Balances updated.");
+}, 24 * 60 * 60 * 1000); // Every 24 hours
+
+// 4. Withdrawal
+app.post("/withdraw", (req, res) => {
+  const { userId, amount, pin } = req.body;
+
+  const user = users.find((u) => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ message: "User not found." });
+  }
+
+  if (amount > user.balance) {
+    return res.status(400).json({ message: "Insufficient balance." });
+  }
+
+  // Process withdrawal
+  user.balance -= amount;
+
+  res.json({ message: "Withdrawal successful!", balance: user.balance });
+});
+
+// 5. Get Dashboard
+app.get("/dashboard", (req, res) => {
+  const { userId } = req.query;
+
+  const user = users.find((u) => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ message: "User not found." });
+  }
+
+  res.json({
+    name: user.name,
+    email: user.email,
+    balance: user.balance,
+    referralLink: user.referralLink,
+  });
+});
+
+// Start Server
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
